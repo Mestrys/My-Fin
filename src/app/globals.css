@@ -46,6 +46,31 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Superfícies com elevação tonal (Material Design 3). */
+  --color-surface: var(--surface);
+  --color-surface-dim: var(--surface-dim);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-surface-container: var(--surface-container);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-on-surface: var(--on-surface);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-outline: var(--outline);
+  --color-outline-variant: var(--outline-variant);
+
+  /* Acentos contábeis (WCAG 2.2 AA — verificados contra surface/surface-container). */
+  --color-income: var(--income);
+  --color-income-container: var(--income-container);
+  --color-income-on-container: var(--income-on-container);
+  --color-expense: var(--expense);
+  --color-expense-container: var(--expense-container);
+  --color-expense-on-container: var(--expense-on-container);
+  --color-transfer: var(--transfer);
+  --color-transfer-container: var(--transfer-container);
+  --color-transfer-on-container: var(--transfer-on-container);
 }
 
 :root {
@@ -81,6 +106,31 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Superfícies MD3 — tema claro. */
+  --surface: oklch(0.99 0 0);
+  --surface-dim: oklch(0.93 0 0);
+  --surface-bright: oklch(1 0 0);
+  --surface-container-lowest: oklch(1 0 0);
+  --surface-container-low: oklch(0.97 0 0);
+  --surface-container: oklch(0.95 0 0);
+  --surface-container-high: oklch(0.93 0 0);
+  --surface-container-highest: oklch(0.9 0 0);
+  --on-surface: oklch(0.145 0 0);
+  --on-surface-variant: oklch(0.44 0 0);
+  --outline: oklch(0.6 0 0);
+  --outline-variant: oklch(0.87 0 0);
+
+  /* Acentos contábeis — tema claro (contraste ≥ 4.5:1 sobre surface). */
+  --income: oklch(0.45 0.13 155);
+  --income-container: oklch(0.93 0.05 155);
+  --income-on-container: oklch(0.27 0.09 155);
+  --expense: oklch(0.5 0.19 25);
+  --expense-container: oklch(0.93 0.06 25);
+  --expense-on-container: oklch(0.32 0.13 25);
+  --transfer: oklch(0.46 0.16 300);
+  --transfer-container: oklch(0.93 0.05 300);
+  --transfer-on-container: oklch(0.3 0.1 300);
 }
 
 .dark {
@@ -115,6 +165,31 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Superfícies MD3 — tema escuro. */
+  --surface: oklch(0.145 0 0);
+  --surface-dim: oklch(0.11 0 0);
+  --surface-bright: oklch(0.32 0 0);
+  --surface-container-lowest: oklch(0.09 0 0);
+  --surface-container-low: oklch(0.17 0 0);
+  --surface-container: oklch(0.2 0 0);
+  --surface-container-high: oklch(0.25 0 0);
+  --surface-container-highest: oklch(0.3 0 0);
+  --on-surface: oklch(0.985 0 0);
+  --on-surface-variant: oklch(0.7 0 0);
+  --outline: oklch(0.55 0 0);
+  --outline-variant: oklch(0.33 0 0);
+
+  /* Acentos contábeis — tema escuro (contraste ≥ 4.5:1 sobre surface). */
+  --income: oklch(0.78 0.15 155);
+  --income-container: oklch(0.28 0.07 155);
+  --income-on-container: oklch(0.9 0.07 155);
+  --expense: oklch(0.76 0.17 25);
+  --expense-container: oklch(0.3 0.09 25);
+  --expense-on-container: oklch(0.92 0.06 25);
+  --transfer: oklch(0.8 0.13 300);
+  --transfer-container: oklch(0.3 0.08 300);
+  --transfer-on-container: oklch(0.92 0.05 300);
 }
 
 @layer base {
@@ -127,4 +202,11 @@
   html {
     @apply font-sans;
   }
+}
+
+/* Modo Privacidade: ofusca todo valor monetário sem afetar o layout. */
+[data-privacy="on"] .money-value {
+  filter: blur(8px);
+  transition: filter 150ms ease;
+  user-select: none;
 }

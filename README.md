@@ -1,30 +1,22 @@
 # My-Fin
 
-Personal Financial Management (PFM) avançado: arquitetura modular, tipagem
-estrita e padrões contábeis formais (partidas dobradas, imutabilidade de
-lançamentos, deduplicação determinística por hash).
+Personal Financial Management (PFM) completo: dashboard consolidado, extrato
+unificado com conciliação, contas e cartões de crédito, e orçamentos
+mensais — construído com arquitetura modular, tipagem estrita e precisão
+monetária exata (`Decimal`, nunca `Float`/`Number`).
 
 ## Stack (zero cost em produção)
 
-| Camada       | Tecnologia                                             |
-| ------------ | ------------------------------------------------------- |
-| Framework    | Next.js 16 (App Router, Server Actions, TS strict)       |
-| UI           | Tailwind CSS v4 + shadcn/ui + Lucide Icons               |
-| Banco        | PostgreSQL (compatível com Supabase / Neon)              |
-| ORM          | Prisma 7 (driver adapter `@prisma/adapter-pg`)           |
-| Dinheiro     | `decimal.js` — nunca `Float`/`Number` para valores monetários |
-| Validação    | Zod (contratos de entrada/saída das Server Actions)      |
-
-## Status do desenvolvimento (execução faseada)
-
-- [x] **Fase 1 — Scaffolding e Schema**: projeto, dependências e
-      `prisma/schema.prisma` com migração inicial aplicada.
-- [ ] **Fase 2 — Motor Contábil e Ingestão**: adapters (OFX, Mock, Inter API),
-      engine de deduplicação por hash e seed de 90 dias.
-- [ ] **Fase 3 — Server Actions e Regras de Negócio**: mutações com Zod,
-      transferências atômicas, liquidação de faturas, saldo projetado.
-- [ ] **Fase 4 — Dashboard e Telas**: cards de balanço/burn rate, tabela de
-      transações, upload de OFX, gráficos (Recharts).
+| Camada       | Tecnologia                                                   |
+| ------------ | ------------------------------------------------------------- |
+| Framework    | Next.js 16 (App Router, Server Actions, TypeScript `strict`)   |
+| UI           | Tailwind CSS v4 + shadcn/ui (Material Design 3) + Lucide Icons |
+| Gráficos     | Recharts                                                       |
+| Banco        | PostgreSQL (compatível com Supabase / Neon, com pooling)       |
+| ORM          | Prisma 6 (`prisma-client-js`)                                  |
+| Dinheiro     | `decimal.js` + `@db.Decimal(12,2)` — nunca `Float`/`Number`    |
+| Validação    | Zod (contratos de entrada/saída das Server Actions)            |
+| Deploy       | Netlify (`@netlify/plugin-nextjs`)                             |
 
 ## Rodando localmente
 
@@ -32,8 +24,9 @@ Pré-requisitos: Node 20+, PostgreSQL 14+.
 
 ```bash
 npm install                 # instala dependências (gera o Prisma Client via postinstall)
-cp .env.example .env        # ajuste DATABASE_URL para o seu Postgres local
+cp .env.example .env        # ajuste DATABASE_URL/DIRECT_URL para o seu Postgres
 npx prisma migrate dev      # aplica as migrações
+npm run db:seed             # popula categorias, contas e 90 dias de transações
 npm run dev                 # http://localhost:3000
 ```
 
@@ -44,25 +37,67 @@ npm run build       # build de produção (Next.js)
 npm run lint         # ESLint
 npm run typecheck    # tsc --noEmit
 npm run db:studio    # Prisma Studio (inspeção visual do banco)
-npm run db:seed      # seed de dados de teste (disponível a partir da Fase 2)
+npm run db:seed      # popula dados de teste (idempotente — reexecutar não duplica nada)
 ```
 
-## Modelagem de dados
+## Arquitetura
 
-O schema (`prisma/schema.prisma`) implementa:
+### Modelagem (`prisma/schema.prisma`)
 
-- **Account**: contas com saldo inicial/corrente em `Decimal(18,4)`.
-- **Transaction**: lançamentos assinados (positivo = crédito, negativo =
-  débito), com `reconciliationHash` único para deduplicação de ingestão,
-  suporte a parcelamento (auto-relação `parentTransactionId`) e vínculo
-  opcional a fatura de cartão de crédito.
-- **Category**: hierárquica (auto-relação `parentId`), com limite
-  orçamentário opcional.
-- **CreditCardInvoice**: ciclo de fatura (fechamento/vencimento/status) com
-  vínculo à transação de liquidação.
-- **IngestionLog**: auditoria de cada rodada de importação (fonte, status,
-  registros processados, erros).
+- **Account**: `initialBalance`/`currentBalance` em `Decimal(12,2)`; `metadata`
+  JSON guarda configurações como o limite do cartão (`creditLimit`).
+- **Transaction**: valor assinado (crédito positivo/débito negativo),
+  `reconciliationHash` único (chave de deduplicação), parcelamento via
+  auto-relação (`parentTransactionId`/`installments`), vínculo opcional a
+  `Transfer` e a `CreditCardInvoice`.
+- **Transfer**: registro-mãe de uma transferência entre contas próprias —
+  as duas pernas (débito/crédito) são `Transaction`s reais do tipo
+  `TRANSFER`, nunca contam como receita/despesa nos relatórios.
+- **Category**: hierárquica (auto-relação `parentId`), com `budgetLimit`
+  mensal opcional (alimenta a tela de Orçamentos).
+- **CreditCardInvoice**: ciclo `closingDate`/`dueDate`/`status`, com relação
+  1:1 à transação de liquidação (`settlementTransactionId`).
+- **SyncLog**: auditoria de cada rodada de ingestão (fonte, status,
+  processados/inseridos/ignorados, erro).
 
-Todos os IDs de conta/categoria/transação usam nomes de coluna em
-`snake_case` (`account_id`, `category_id`, ...) via `@map`, mantendo o banco
-consistente independentemente da convenção `camelCase` do lado TypeScript.
+### Motor de ingestão (`src/lib/financial-engine`)
+
+- `financial-adapter.ts`: contrato `FinancialAdapter` comum a todas as fontes.
+- `ofx-adapter.ts`: parser nativo de OFX brasileiro (SGML e XML), com
+  detecção de encoding (Windows-1252/UTF-8) via cabeçalho `CHARSET`.
+- `mock-adapter.ts`: gerador determinístico (seed fixa) de 90 dias de
+  transações realistas — salário no 5º dia útil, assinaturas recorrentes,
+  despesas essenciais e parcelamentos.
+- `inter-api-adapter.ts`: stub estrutural para a API do Inter, já preparado
+  para autenticação mTLS via variáveis de ambiente em Base64.
+- `reconciliation.ts`: hash determinístico
+  `SHA256(accountId + data + valor + descrição normalizada + fitId)` — a
+  mesma importação rodada duas vezes nunca duplica uma transação.
+
+### Server Actions (`src/actions`)
+
+- `transactions.ts`: CRUD com atualização atômica de `currentBalance`, mais
+  ações em lote (recategorizar, conciliar, excluir).
+- `transfers.ts`: transferência atômica (`prisma.$transaction`) entre
+  contas, com partida dobrada real.
+- `credit-cards.ts`: lançamento de compra parcelada (gera as N transações
+  filhas já vinculadas às faturas correspondentes) e liquidação de fatura.
+- `import-ofx.ts`: recebe o arquivo `.ofx`, deduplica e insere em lote,
+  registrando tudo em `SyncLog`.
+
+### UI (`src/app/(dashboard)`)
+
+Shell com Navigation Rail, Top App Bar (seletor de período, indicador de
+sincronização, Modo Privacidade, FAB de nova transação) e 4 telas:
+Dashboard (KPIs, fluxo de caixa realizado vs. projetado, despesas por
+categoria), Extrato (dropzone de OFX, tabela de alta densidade, ações em
+lote), Contas (grid de contas + módulo de cartão de crédito com régua de
+fatura e parcelamentos ativos) e Orçamentos (progresso por categoria com
+alerta de ritmo de queima acelerado).
+
+## Deploy (Netlify)
+
+`netlify.toml` já configura o build (`prisma generate && next build`) e o
+plugin oficial. Configure `DATABASE_URL` (endpoint com connection pooling,
+ex. Supabase porta 6543 ou Neon `-pooler`) e `DIRECT_URL` (conexão direta,
+usada só pelo `prisma migrate`) nas variáveis de ambiente do site.
