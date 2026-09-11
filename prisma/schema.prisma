@@ -1,0 +1,258 @@
+// ============================================================================
+// My-Fin — Personal Financial Management (PFM)
+// ============================================================================
+// Convenções de domínio (não negociáveis):
+//
+// 1. DINHEIRO NUNCA É Float/Number. Todo campo monetário é `Decimal` no banco
+//    e DEVE ser manipulado exclusivamente via Decimal.js na camada de
+//    aplicação (src/lib/financial-engine). Conversões para Number só ocorrem
+//    na fronteira de apresentação (formatação de UI), nunca em cálculo.
+// 2. `Transaction.amount` é assinado: positivo = crédito (entra na conta),
+//    negativo = débito (sai da conta). Transferências são sempre registradas
+//    como DOIS lançamentos (partidas dobradas), nunca um único registro com
+//    sinal implícito.
+// 3. Transações são, por princípio, IMUTÁVEIS após criação e reconciliação.
+//    Correções são feitas por novos lançamentos do tipo ADJUSTMENT, nunca por
+//    UPDATE destrutivo do valor original (a camada de Server Actions, na
+//    Fase 3, é responsável por impor essa regra).
+// 4. `reconciliationHash` é a chave de deduplicação determinística
+//    (SHA-256 de accountId + date + amount + descrição normalizada) usada
+//    pelo engine de ingestão para garantir idempotência de importações.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CREDIT_CARD
+  INVESTMENT
+  CASH
+
+  @@map("account_type")
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  ADJUSTMENT
+
+  @@map("transaction_type")
+}
+
+enum InvoiceStatus {
+  OPEN
+  CLOSED
+  PAID
+
+  @@map("invoice_status")
+}
+
+enum IngestionSource {
+  INTER_API
+  OFX_IMPORT
+  MOCK
+
+  @@map("ingestion_source")
+}
+
+enum IngestionStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL_FAILURE
+  FAILED
+
+  @@map("ingestion_status")
+}
+
+// ----------------------------------------------------------------------------
+// Account
+// ----------------------------------------------------------------------------
+
+model Account {
+  id       String      @id @default(cuid())
+  name     String
+  type     AccountType
+  currency String      @default("BRL") @db.Char(3) // ISO 4217
+
+  /// Saldo de abertura da conta no momento em que passou a ser rastreada.
+  initialBalance Decimal @default(0) @map("initial_balance") @db.Decimal(18, 4)
+
+  /// Saldo corrente materializado (derivado de initialBalance + soma de
+  /// transactions.amount). Mantido de forma desnormalizada por performance
+  /// e recalculado transacionalmente pelas Server Actions (Fase 3).
+  currentBalance Decimal @default(0) @map("current_balance") @db.Decimal(18, 4)
+
+  isActive Boolean @default(true) @map("is_active")
+
+  /// Configurações livres (ex.: tokens de integração, apelidos de import,
+  /// preferências de exibição). Nunca armazenar segredos em texto puro aqui.
+  metadata Json @default("{}")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  transactions       Transaction[]
+  creditCardInvoices CreditCardInvoice[]
+
+  @@index([type])
+  @@index([isActive])
+  @@map("accounts")
+}
+
+// ----------------------------------------------------------------------------
+// Category
+// ----------------------------------------------------------------------------
+
+model Category {
+  id    String  @id @default(cuid())
+  name  String
+  icon  String?
+  color String?
+
+  /// Limite orçamentário mensal opcional (para relatórios de burn rate).
+  budgetLimit Decimal? @map("budget_limit") @db.Decimal(18, 4)
+
+  parentId String?    @map("parent_id")
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([parentId])
+  @@map("categories")
+}
+
+// ----------------------------------------------------------------------------
+// Transaction
+// ----------------------------------------------------------------------------
+
+model Transaction {
+  id String @id @default(cuid())
+
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  /// Assinado: positivo = crédito, negativo = débito. Sempre Decimal.
+  amount Decimal         @db.Decimal(18, 4)
+  type   TransactionType
+
+  description         String
+  /// Descrição bruta original do extrato/OFX/API, preservada para auditoria
+  /// e para o cálculo do reconciliationHash.
+  originalDescription String? @map("original_description")
+
+  date DateTime
+
+  isReconciled Boolean @default(false) @map("is_reconciled")
+
+  /// SHA-256(accountId + date + amount + originalDescription normalizada).
+  /// Chave de deduplicação: única no banco, garante idempotência de ingestão.
+  reconciliationHash String @unique @map("reconciliation_hash")
+
+  /// Parcelamento: número desta parcela (1-based) e total de parcelas.
+  installmentNumber Int? @map("installment_number")
+  totalInstallments Int? @map("total_installments")
+
+  /// Auto-relação: aponta para a transação-mãe de um grupo de parcelas.
+  parentTransactionId String?       @map("parent_transaction_id")
+  parentTransaction   Transaction?  @relation("InstallmentGroup", fields: [parentTransactionId], references: [id], onDelete: Restrict)
+  installments        Transaction[] @relation("InstallmentGroup")
+
+  /// Agrupa as duas pernas (débito/crédito) de uma transferência entre
+  /// contas próprias, garantindo o vínculo de partida dobrada.
+  transferGroupId String? @map("transfer_group_id")
+
+  /// Vincula um lançamento de despesa à fatura de cartão de crédito à qual
+  /// pertence (quando accountId é uma conta CREDIT_CARD).
+  creditCardInvoiceId String?            @map("credit_card_invoice_id")
+  creditCardInvoice   CreditCardInvoice? @relation("InvoiceTransactions", fields: [creditCardInvoiceId], references: [id], onDelete: SetNull)
+
+  /// Lado inverso: se esta transação É o pagamento que liquida uma fatura.
+  invoiceSettlementFor CreditCardInvoice? @relation("InvoiceSettlement")
+
+  ingestionLogId String?       @map("ingestion_log_id")
+  ingestionLog   IngestionLog? @relation(fields: [ingestionLogId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([accountId, date])
+  @@index([categoryId])
+  @@index([parentTransactionId])
+  @@index([transferGroupId])
+  @@index([creditCardInvoiceId])
+  @@index([ingestionLogId])
+  @@map("transactions")
+}
+
+// ----------------------------------------------------------------------------
+// CreditCardInvoice
+// ----------------------------------------------------------------------------
+
+model CreditCardInvoice {
+  id String @id @default(cuid())
+
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  closingDate DateTime @map("closing_date")
+  dueDate     DateTime @map("due_date")
+
+  totalAmount Decimal       @map("total_amount") @db.Decimal(18, 4)
+  status      InvoiceStatus @default(OPEN)
+
+  /// Despesas lançadas na fatura.
+  transactions Transaction[] @relation("InvoiceTransactions")
+
+  /// Transação de pagamento (débito na conta corrente) que liquidou a fatura.
+  settlementTransactionId String?      @unique @map("settlement_transaction_id")
+  settlementTransaction   Transaction? @relation("InvoiceSettlement", fields: [settlementTransactionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([accountId, status])
+  @@index([dueDate])
+  @@map("credit_card_invoices")
+}
+
+// ----------------------------------------------------------------------------
+// IngestionLog
+// ----------------------------------------------------------------------------
+
+model IngestionLog {
+  id String @id @default(cuid())
+
+  source IngestionSource
+  status IngestionStatus @default(RUNNING)
+
+  recordsProcessed Int     @default(0) @map("records_processed")
+  errorLog         String? @map("error_log") @db.Text
+
+  transactions Transaction[]
+
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+
+  @@index([source, status])
+  @@map("ingestion_logs")
+}
