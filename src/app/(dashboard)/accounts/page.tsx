@@ -1,10 +1,18 @@
 import { Landmark } from "lucide-react";
+import { prisma } from "@/lib/prisma";
 import { listAccountViews } from "@/lib/queries/accounts";
 import { AccountCard } from "@/components/accounts/account-card";
 import { EmptyState } from "@/components/dashboard/empty-state";
 
 export default async function AccountsPage() {
-  const accounts = await listAccountViews();
+  const [accounts, expenseCategories] = await Promise.all([
+    listAccountViews(),
+    prisma.category.findMany({
+      where: { type: "EXPENSE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+  ]);
   const payerAccounts = accounts
     .filter((a) => a.type !== "CREDIT_CARD")
     .map((a) => ({ id: a.id, name: a.name }));
@@ -25,7 +33,7 @@ export default async function AccountsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {accounts.map((account) => (
-            <AccountCard key={account.id} account={account} payerAccounts={payerAccounts} />
+            <AccountCard key={account.id} account={account} payerAccounts={payerAccounts} expenseCategories={expenseCategories} />
           ))}
         </div>
       )}

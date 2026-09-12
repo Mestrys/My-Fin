@@ -68,8 +68,8 @@ npm run db:seed      # popula dados de teste (idempotente — reexecutar não du
 - `mock-adapter.ts`: gerador determinístico (seed fixa) de 90 dias de
   transações realistas — salário no 5º dia útil, assinaturas recorrentes,
   despesas essenciais e parcelamentos.
-- `inter-api-adapter.ts`: stub estrutural para a API do Inter, já preparado
-  para autenticação mTLS via variáveis de ambiente em Base64.
+- `inter-api-adapter.ts`: integração Banking PJ do Inter (OAuth2 + mTLS),
+  com `importInter` + painel no Extrato. Configure `INTER_CLIENT_ID/SECRET`, certificado/chave em Base64 e `INTER_ACCOUNT_NUMBER`.
 - `reconciliation.ts`: hash determinístico
   `SHA256(accountId + data + valor + descrição normalizada + fitId)` — a
   mesma importação rodada duas vezes nunca duplica uma transação.
@@ -82,7 +82,7 @@ npm run db:seed      # popula dados de teste (idempotente — reexecutar não du
   contas, com partida dobrada real.
 - `credit-cards.ts`: lançamento de compra parcelada (gera as N transações
   filhas já vinculadas às faturas correspondentes) e liquidação de fatura.
-- `import-ofx.ts`: recebe o arquivo `.ofx`, deduplica e insere em lote,
+- `import-ofx.ts` / `import-inter.ts`: OFX por upload ou sync Banking PJ do Inter; deduplica e insere em lote,
   registrando tudo em `SyncLog`.
 
 ### UI (`src/app/(dashboard)`)

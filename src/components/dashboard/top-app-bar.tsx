@@ -6,6 +6,7 @@ import {
   type AccountOption,
   type CategoryOption,
 } from "@/components/dashboard/new-transaction-dialog";
+import { TransferDialog } from "@/components/dashboard/transfer-dialog";
 
 export function TopAppBar({
   lastSync,
@@ -24,6 +25,7 @@ export function TopAppBar({
       </div>
       <div className="flex items-center gap-2">
         <PrivacyToggle />
+        <TransferDialog accounts={accounts} />
         <NewTransactionDialog accounts={accounts} categories={categories} />
       </div>
     </header>
