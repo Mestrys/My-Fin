@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatDateShort, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SettleInvoiceDialog } from "@/components/accounts/settle-invoice-dialog";
+import { InstallmentPurchaseDialog } from "@/components/accounts/installment-purchase-dialog";
 import { Button } from "@/components/ui/button";
 import type { CreditCardView } from "@/lib/queries/accounts";
 
@@ -16,15 +17,19 @@ interface AccountOption {
 }
 
 export function CreditCardModule({
+  accountId,
   creditCard,
   currentBalance,
   creditLimit,
   payerAccounts,
+  expenseCategories = [],
 }: {
+  accountId: string;
   creditCard: CreditCardView;
   currentBalance: string;
   creditLimit: string | null;
   payerAccounts: AccountOption[];
+  expenseCategories?: Array<{ id: string; name: string }>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const today = new Date();
@@ -55,11 +60,20 @@ export function CreditCardModule({
 
   return (
     <div className="space-y-4 rounded-2xl border border-outline-variant bg-surface-container-low p-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-medium text-on-surface">
           <CreditCard className="size-4" />
           Fatura atual
         </div>
+        <InstallmentPurchaseDialog
+          accountId={accountId}
+          categories={expenseCategories}
+          trigger={
+            <Button size="sm" variant="outline">
+              Compra parcelada
+            </Button>
+          }
+        />
         {currentInvoice && (
           <Badge variant={currentInvoice.status === "CLOSED" ? "secondary" : "outline"}>
             {currentInvoice.status === "OPEN" ? "Aberta" : "Fechada"}

@@ -2,6 +2,7 @@ import type { TransactionType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { listTransactions } from "@/lib/queries/transactions";
 import { OfxDropzone } from "@/components/transactions/ofx-dropzone";
+import { InterSyncPanel } from "@/components/transactions/inter-sync-panel";
 import { FilterBar } from "@/components/transactions/filter-bar";
 import { TransactionsTable, type TransactionRow } from "@/components/transactions/transactions-table";
 import { PaginationBar } from "@/components/pagination-bar";
@@ -59,6 +60,7 @@ export default async function TransactionsPage({
       </div>
 
       <OfxDropzone accounts={accounts} />
+      <InterSyncPanel accounts={accounts} />
       <FilterBar accounts={accounts} categories={categories} />
       <TransactionsTable rows={tableRows} categories={categories} />
       <PaginationBar page={page} pageCount={pageCount} />

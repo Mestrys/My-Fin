@@ -24,9 +24,11 @@ const TYPE_LABEL: Record<AccountView["type"], string> = {
 export function AccountCard({
   account,
   payerAccounts,
+  expenseCategories = [],
 }: {
   account: AccountView;
   payerAccounts: Array<{ id: string; name: string }>;
+  expenseCategories?: Array<{ id: string; name: string }>;
 }) {
   const Icon = TYPE_ICON[account.type];
   const isCreditCard = account.type === "CREDIT_CARD";
@@ -55,10 +57,12 @@ export function AccountCard({
 
         {isCreditCard && account.creditCard && (
           <CreditCardModule
+            accountId={account.id}
             creditCard={account.creditCard}
             currentBalance={account.currentBalance}
             creditLimit={account.creditLimit}
             payerAccounts={payerAccounts}
+            expenseCategories={expenseCategories}
           />
         )}
       </CardContent>
