@@ -1,0 +1,294 @@
+// ============================================================================
+// My-Fin — Personal Financial Management (PFM)
+// ============================================================================
+// Convenções de domínio (não negociáveis):
+//
+// 1. DINHEIRO NUNCA É Float/Number. Todo campo monetário é `Decimal(12,2)`
+//    no banco e DEVE ser manipulado exclusivamente via Decimal.js na camada
+//    de aplicação (src/lib/financial-engine, src/actions). Conversão para
+//    Number só ocorre na fronteira de apresentação (formatação de UI).
+// 2. `Transaction.amount` é assinado: positivo = crédito, negativo = débito.
+//    Transferências são SEMPRE duas transações (débito + crédito) amarradas
+//    por um registro `Transfer` — nunca um único lançamento com sinal
+//    implícito, e nunca contam como receita/despesa no somatório do mês.
+// 3. `reconciliationHash` é a chave de deduplicação determinística
+//    (SHA-256 de accountId + data + valor + descrição normalizada + fitId)
+//    usada pelo engine de ingestão (src/lib/financial-engine/reconciliation.ts)
+//    para garantir idempotência de importações.
+// ============================================================================
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----------------------------------------------------------------------------
+// Enums
+// ----------------------------------------------------------------------------
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CREDIT_CARD
+  INVESTMENT
+  CASH
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum InvoiceStatus {
+  OPEN
+  CLOSED
+  PAID
+}
+
+enum SyncProvider {
+  OFX_IMPORT
+  INTER_API
+  MOCK
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL_FAILURE
+  FAILED
+}
+
+// ----------------------------------------------------------------------------
+// Account
+// ----------------------------------------------------------------------------
+
+model Account {
+  id       String      @id @default(uuid())
+  name     String
+  type     AccountType
+  currency String      @default("BRL")
+
+  /// Saldo de abertura no momento em que a conta passou a ser rastreada.
+  initialBalance Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Saldo corrente materializado (initialBalance + soma de
+  /// transactions.amount). Recalculado atomicamente pelas Server Actions.
+  currentBalance Decimal @default(0) @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions       Transaction[]
+  creditCardInvoices CreditCardInvoice[]
+  transfersOut       Transfer[]          @relation("TransferSource")
+  transfersIn        Transfer[]          @relation("TransferDestination")
+
+  @@index([type])
+  @@index([isActive])
+  @@map("accounts")
+}
+
+// ----------------------------------------------------------------------------
+// Category
+// ----------------------------------------------------------------------------
+
+model Category {
+  id    String       @id @default(uuid())
+  name  String
+  type  CategoryType
+  icon  String?
+  color String?
+
+  /// Teto orçamentário mensal opcional (para relatórios de burn rate).
+  budgetLimit Decimal? @db.Decimal(12, 2)
+
+  parentId String?
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([type])
+  @@map("categories")
+}
+
+// ----------------------------------------------------------------------------
+// Transaction
+// ----------------------------------------------------------------------------
+
+model Transaction {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  /// Assinado: positivo = crédito, negativo = débito. Sempre Decimal.
+  amount Decimal         @db.Decimal(12, 2)
+  type   TransactionType
+
+  description         String
+  /// Descrição bruta original do extrato/OFX/API — preservada para auditoria
+  /// e para o cálculo do reconciliationHash.
+  originalDescription String?
+
+  date DateTime
+
+  /// Para lançamentos futuros/agendados (ex.: parcelas projetadas) que ainda
+  /// não impactaram o saldo real da conta.
+  isPaid       Boolean @default(true)
+  isReconciled Boolean @default(false)
+
+  /// SHA-256(accountId + data + valor + descrição normalizada + fitId).
+  /// Único no banco: garante idempotência de ingestão.
+  reconciliationHash String @unique
+
+  /// Parcelamento: número desta parcela (1-based) e total de parcelas.
+  installmentNumber Int?
+  totalInstallments Int?
+
+  /// Auto-relação: aponta para a transação-mãe (1ª parcela) de um grupo.
+  parentTransactionId String?
+  parentTransaction   Transaction?  @relation("InstallmentGroup", fields: [parentTransactionId], references: [id], onDelete: Restrict)
+  installments        Transaction[] @relation("InstallmentGroup")
+
+  /// Vincula esta perna (débito ou crédito) ao registro de transferência.
+  transferId String?
+  transfer   Transfer? @relation(fields: [transferId], references: [id], onDelete: SetNull)
+
+  /// Vincula uma despesa de cartão à fatura à qual pertence.
+  creditCardInvoiceId String?
+  creditCardInvoice   CreditCardInvoice? @relation("InvoiceTransactions", fields: [creditCardInvoiceId], references: [id], onDelete: SetNull)
+
+  /// Lado inverso: esta transação É o pagamento que liquidou uma fatura.
+  invoiceSettlementFor CreditCardInvoice? @relation("InvoiceSettlement")
+
+  syncLogId String?
+  syncLog   SyncLog? @relation(fields: [syncLogId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId, date])
+  @@index([categoryId])
+  @@index([parentTransactionId])
+  @@index([transferId])
+  @@index([creditCardInvoiceId])
+  @@index([syncLogId])
+  @@map("transactions")
+}
+
+// ----------------------------------------------------------------------------
+// Transfer
+// ----------------------------------------------------------------------------
+
+/// Registro-mãe de uma transferência entre duas contas próprias. As duas
+/// pernas (débito na origem, crédito no destino) são Transactions reais que
+/// apontam de volta para cá via `transferId` — nunca contam como
+/// INCOME/EXPENSE no somatório mensal. `sourceTransactionId` /
+/// `destinationTransactionId` são mantidos como ponteiros diretos e únicos
+/// (sem relação Prisma dedicada, para não colidir com a relação já
+/// existente Transaction.transferId → Transfer) para leitura O(1) de qual
+/// perna é qual sem precisar filtrar `legs` por sinal.
+model Transfer {
+  id String @id @default(uuid())
+
+  sourceAccountId      String
+  sourceAccount        Account @relation("TransferSource", fields: [sourceAccountId], references: [id], onDelete: Restrict)
+  destinationAccountId String
+  destinationAccount   Account @relation("TransferDestination", fields: [destinationAccountId], references: [id], onDelete: Restrict)
+
+  sourceTransactionId      String @unique
+  destinationTransactionId String @unique
+
+  amount Decimal  @db.Decimal(12, 2)
+  date   DateTime
+
+  /// As duas pernas (débito + crédito) desta transferência.
+  legs Transaction[]
+
+  createdAt DateTime @default(now())
+
+  @@index([sourceAccountId])
+  @@index([destinationAccountId])
+  @@map("transfers")
+}
+
+// ----------------------------------------------------------------------------
+// CreditCardInvoice
+// ----------------------------------------------------------------------------
+
+model CreditCardInvoice {
+  id String @id @default(uuid())
+
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  closingDate DateTime
+  dueDate     DateTime
+
+  totalAmount Decimal       @db.Decimal(12, 2)
+  status      InvoiceStatus @default(OPEN)
+
+  /// Despesas lançadas na fatura.
+  transactions Transaction[] @relation("InvoiceTransactions")
+
+  /// Transação de pagamento (débito na conta corrente) que liquidou a fatura.
+  settlementTransactionId String?      @unique
+  settlementTransaction   Transaction? @relation("InvoiceSettlement", fields: [settlementTransactionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountId, status])
+  @@index([dueDate])
+  @@unique([accountId, closingDate])
+  @@map("credit_card_invoices")
+}
+
+// ----------------------------------------------------------------------------
+// SyncLog
+// ----------------------------------------------------------------------------
+
+model SyncLog {
+  id String @id @default(uuid())
+
+  provider SyncProvider
+  status   SyncStatus   @default(RUNNING)
+
+  recordsProcessed Int @default(0)
+  recordsInserted  Int @default(0)
+  recordsSkipped   Int @default(0)
+
+  errorDetails String? @db.Text
+
+  transactions Transaction[]
+
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([provider, status])
+  @@map("sync_logs")
+}
