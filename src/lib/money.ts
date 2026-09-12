@@ -14,7 +14,15 @@ export function toDecimal(value: string | number | Decimal): Decimal {
  */
 export const moneySchema = z.union([z.string(), z.number()]).transform((value, ctx) => {
   try {
-    const decimal = new Decimal(value);
+    // Formato BR (`1.234,56` / `10,50`) → remove milhar e troca vírgula.
+    // Valores já com ponto decimal (`10.50`) passam intactos.
+    const normalized =
+      typeof value === "string"
+        ? value.includes(",")
+          ? value.trim().replace(/\./g, "").replace(",", ".")
+          : value.trim()
+        : value;
+    const decimal = new Decimal(normalized);
     if (!decimal.isFinite()) throw new Error("not finite");
     return decimal;
   } catch {

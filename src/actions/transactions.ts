@@ -86,11 +86,24 @@ export async function updateTransaction(input: UpdateTransactionInput) {
   const parsed = updateTransactionSchema.parse(input);
 
   const result = await prisma.$transaction(async (tx) => {
-    const existing = await tx.transaction.findUniqueOrThrow({ where: { id: parsed.id } });
+    const existing = await tx.transaction.findUniqueOrThrow({
+      where: { id: parsed.id },
+      include: { invoiceSettlementFor: { select: { id: true } } },
+    });
 
     if (existing.transferId) {
       throw new Error(
         "Esta transação faz parte de uma transferência — edite-a por transfers.ts.",
+      );
+    }
+    if (existing.creditCardInvoiceId) {
+      throw new Error(
+        "Esta transação pertence a uma fatura de cartão — não pode ser editada isoladamente.",
+      );
+    }
+    if (existing.invoiceSettlementFor) {
+      throw new Error(
+        "Esta transação liquidou uma fatura — não pode ser editada. Estorne pela fatura.",
       );
     }
 
@@ -154,7 +167,10 @@ export async function deleteTransaction(input: z.infer<typeof deleteTransactionS
   const { id } = deleteTransactionSchema.parse(input);
 
   await prisma.$transaction(async (tx) => {
-    const existing = await tx.transaction.findUniqueOrThrow({ where: { id } });
+    const existing = await tx.transaction.findUniqueOrThrow({
+      where: { id },
+      include: { invoiceSettlementFor: { select: { id: true } } },
+    });
 
     if (existing.transferId) {
       throw new Error(
@@ -164,6 +180,11 @@ export async function deleteTransaction(input: z.infer<typeof deleteTransactionS
     if (existing.creditCardInvoiceId) {
       throw new Error(
         "Esta transação pertence a uma fatura de cartão — não pode ser excluída isoladamente.",
+      );
+    }
+    if (existing.invoiceSettlementFor) {
+      throw new Error(
+        "Esta transação liquidou uma fatura — não pode ser excluída isoladamente.",
       );
     }
 

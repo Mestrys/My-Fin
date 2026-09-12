@@ -78,8 +78,19 @@ export async function partitionByExistingHash(
 
   const toInsert: HashedTransaction[] = [];
   const duplicates: HashedTransaction[] = [];
+  // Também deduplica hashes repetidos dentro do próprio lote (mesmo arquivo
+  // OFX com linhas idênticas), senão o createMany estoura no índice único.
+  const seenInBatch = new Set<string>();
   for (const transaction of transactions) {
-    (existingHashes.has(transaction.reconciliationHash) ? duplicates : toInsert).push(transaction);
+    if (
+      existingHashes.has(transaction.reconciliationHash) ||
+      seenInBatch.has(transaction.reconciliationHash)
+    ) {
+      duplicates.push(transaction);
+      continue;
+    }
+    seenInBatch.add(transaction.reconciliationHash);
+    toInsert.push(transaction);
   }
   return { toInsert, duplicates };
 }

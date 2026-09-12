@@ -30,10 +30,10 @@ function invoiceWindowForPurchase(date: Date, monthsAhead: number) {
 }
 
 async function getOrCreateInvoice(tx: TxClient, accountId: string, closingDate: Date, dueDate: Date) {
-  const existing = await tx.creditCardInvoice.findFirst({ where: { accountId, closingDate } });
-  if (existing) return existing;
-  return tx.creditCardInvoice.create({
-    data: { accountId, closingDate, dueDate, totalAmount: "0.00", status: "OPEN" },
+  return tx.creditCardInvoice.upsert({
+    where: { accountId_closingDate: { accountId, closingDate } },
+    create: { accountId, closingDate, dueDate, totalAmount: "0.00", status: "OPEN" },
+    update: {},
   });
 }
 
@@ -135,7 +135,8 @@ export type SettleInvoiceInput = z.input<typeof settleInvoiceSchema>;
 
 /**
  * Liquida uma fatura: debita o valor total da conta pagadora (conta
- * corrente) e fecha a fatura como PAID. Usa o tipo ADJUSTMENT — não
+ * corrente), reduz o saldo comprometido do cartão (restaurando patrimônio
+ * líquido) e fecha a fatura como PAID. Usa o tipo ADJUSTMENT — não
  * EXPENSE — porque a despesa já foi reconhecida no somatório mensal no
  * momento de cada compra parcelada; contá-la de novo aqui duplicaria o
  * gasto no relatório de fluxo de caixa.
@@ -147,6 +148,17 @@ export async function settleInvoice(input: SettleInvoiceInput) {
     const invoice = await tx.creditCardInvoice.findUniqueOrThrow({ where: { id: parsed.invoiceId } });
     if (invoice.status === "PAID") {
       throw new Error("Esta fatura já está liquidada.");
+    }
+    if (parsed.payingAccountId === invoice.accountId) {
+      throw new Error("A conta pagadora deve ser diferente do cartão da fatura.");
+    }
+
+    const payer = await tx.account.findUniqueOrThrow({ where: { id: parsed.payingAccountId } });
+    if (!payer.isActive) {
+      throw new Error("A conta pagadora está inativa.");
+    }
+    if (payer.type === "CREDIT_CARD") {
+      throw new Error("A conta pagadora não pode ser um cartão de crédito.");
     }
 
     const totalAmount = toDecimal(invoice.totalAmount.toString());
@@ -171,9 +183,20 @@ export async function settleInvoice(input: SettleInvoiceInput) {
       },
     });
 
+    // Caixa ↓ e dívida do cartão ↑ (currentBalance menos negativo): patrimônio
+    // líquido permanece estável.
     await tx.account.update({
       where: { id: parsed.payingAccountId },
       data: { currentBalance: { decrement: decimalToDb(totalAmount) } },
+    });
+    await tx.account.update({
+      where: { id: invoice.accountId },
+      data: { currentBalance: { increment: decimalToDb(totalAmount) } },
+    });
+
+    await tx.transaction.updateMany({
+      where: { creditCardInvoiceId: invoice.id },
+      data: { isPaid: true },
     });
 
     await tx.creditCardInvoice.update({

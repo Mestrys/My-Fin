@@ -264,6 +264,7 @@ model CreditCardInvoice {
 
   @@index([accountId, status])
   @@index([dueDate])
+  @@unique([accountId, closingDate])
   @@map("credit_card_invoices")
 }
 

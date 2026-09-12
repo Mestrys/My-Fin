@@ -165,6 +165,9 @@ CREATE INDEX "transfers_destinationAccountId_idx" ON "transfers"("destinationAcc
 CREATE UNIQUE INDEX "credit_card_invoices_settlementTransactionId_key" ON "credit_card_invoices"("settlementTransactionId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "credit_card_invoices_accountId_closingDate_key" ON "credit_card_invoices"("accountId", "closingDate");
+
+-- CreateIndex
 CREATE INDEX "credit_card_invoices_accountId_status_idx" ON "credit_card_invoices"("accountId", "status");
 
 -- CreateIndex

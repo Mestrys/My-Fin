@@ -95,6 +95,12 @@ lote), Contas (grid de contas + módulo de cartão de crédito com régua de
 fatura e parcelamentos ativos) e Orçamentos (progresso por categoria com
 alerta de ritmo de queima acelerado).
 
+## Segurança
+
+Em uso local o app fica aberto. Em deploy público (Netlify), defina
+`APP_ACCESS_TOKEN` nas variáveis de ambiente — o middleware passa a exigir
+login com esse token antes de qualquer rota (exceto `/login`).
+
 ## Deploy (Netlify)
 
 `netlify.toml` já configura o build (`prisma generate && next build`) e o
