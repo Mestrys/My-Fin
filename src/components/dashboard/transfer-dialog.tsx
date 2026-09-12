@@ -10,6 +10,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,15 +79,14 @@ export function TransferDialog({ accounts }: { accounts: AccountOption[] }) {
         if (!next) resetForm();
       }}
     >
-      <Button
-        size="lg"
-        variant="outline"
-        className="gap-2 rounded-full"
-        onClick={() => setOpen(true)}
-      >
-        <ArrowLeftRight className="size-4" />
-        Transferir
-      </Button>
+      <DialogTrigger
+        render={
+          <Button size="lg" variant="outline" className="gap-2 rounded-full">
+            <ArrowLeftRight className="size-4" />
+            Transferir
+          </Button>
+        }
+      />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Transferência entre contas</DialogTitle>

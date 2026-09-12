@@ -9,6 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -85,15 +86,7 @@ export function InstallmentPurchaseDialog({
         if (!next) resetForm();
       }}
     >
-      <span
-        className="inline-flex"
-        onClick={(event) => {
-          event.preventDefault();
-          setOpen(true);
-        }}
-      >
-        {trigger}
-      </span>
+      <DialogTrigger render={trigger} />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Compra parcelada</DialogTitle>
