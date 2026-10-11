@@ -100,4 +100,78 @@ describe("cartão de crédito (banco real)", { skip: skipWithoutDb }, () => {
     );
     assert.ok(installments.every((t) => t.creditCardInvoice?.status === "OPEN"));
   });
+
+  it("parcelamento em 48x: uma fatura por mês, totais e saldo do cartão corretos", async () => {
+    const prisma = await loadPrisma();
+    const { createInstallmentPurchase } = await loadActions();
+    const card = await createAccount({ type: "CREDIT_CARD" });
+
+    const installments = await createInstallmentPurchase({
+      accountId: card.id,
+      totalAmount: "1000.00",
+      description: "Geladeira",
+      date: new Date(Date.UTC(2025, 0, 26)),
+      totalInstallments: 48,
+    });
+
+    assert.equal(installments.length, 48);
+    assert.deepEqual(
+      installments.map((t) => t.installmentNumber),
+      Array.from({ length: 48 }, (_, i) => i + 1),
+    );
+    const parentId = installments[0].id;
+    assert.equal(installments[0].parentTransactionId, null);
+    assert.ok(installments.slice(1).every((t) => t.parentTransactionId === parentId));
+    assert.equal(installments[0].date.toISOString().slice(0, 10), "2025-02-25");
+    assert.equal(installments[47].date.toISOString().slice(0, 10), "2029-01-25");
+    assert.equal(installments[47].amount.toFixed(2), "-20.99");
+
+    const invoices = await prisma.creditCardInvoice.findMany({ where: { accountId: card.id } });
+    assert.equal(invoices.length, 48);
+    const invoiceTotal = invoices.reduce((sum, i) => sum + Number(i.totalAmount), 0);
+    assert.equal(invoiceTotal.toFixed(2), "1000.00");
+    const cardAfter = await prisma.account.findUniqueOrThrow({ where: { id: card.id } });
+    assert.equal(cardAfter.currentBalance.toFixed(2), "-1000.00");
+    assert.equal(await ledgerDrift(card.id), "0.00");
+  });
+
+  it("compras simultâneas no mesmo cartão somam nas mesmas faturas", async () => {
+    const prisma = await loadPrisma();
+    const { createInstallmentPurchase } = await loadActions();
+    const card = await createAccount({ type: "CREDIT_CARD" });
+    const date = new Date(Date.UTC(2025, 0, 10));
+
+    await Promise.all([
+      createInstallmentPurchase({ accountId: card.id, totalAmount: "30.00", description: "A", date, totalInstallments: 3 }),
+      createInstallmentPurchase({ accountId: card.id, totalAmount: "60.00", description: "B", date, totalInstallments: 3 }),
+    ]);
+
+    const invoices = await prisma.creditCardInvoice.findMany({
+      where: { accountId: card.id },
+      orderBy: { closingDate: "asc" },
+    });
+    assert.deepEqual(
+      invoices.map((i) => i.totalAmount.toFixed(2)),
+      ["30.00", "30.00", "30.00"],
+    );
+  });
+
+  it("recusa compra parcelada em conta que não é cartão", async () => {
+    const prisma = await loadPrisma();
+    const { createInstallmentPurchase } = await loadActions();
+    const checking = await createAccount({ type: "CHECKING", balance: "100.00" });
+
+    await assert.rejects(
+      createInstallmentPurchase({
+        accountId: checking.id,
+        totalAmount: "50.00",
+        description: "Errado",
+        date: new Date(Date.UTC(2025, 0, 10)),
+        totalInstallments: 2,
+      }),
+      /cartão de crédito/,
+    );
+    assert.equal(await prisma.transaction.count(), 0);
+    assert.equal(await prisma.creditCardInvoice.count(), 0);
+  });
 });
