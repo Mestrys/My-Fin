@@ -37,6 +37,20 @@ async function getOrCreateInvoice(tx: TxClient, accountId: string, closingDate: 
   });
 }
 
+/**
+ * Soma `amount` ao total da fatura somente se ela ainda não foi paga. O
+ * `UPDATE ... WHERE status <> 'PAID'` trava a linha e reavalia o status
+ * depois de qualquer pagamento concorrente, então nunca soma valor numa
+ * fatura liquidada (valor que nunca seria cobrado).
+ */
+async function addToOpenInvoice(tx: TxClient, invoiceId: string, amount: Decimal): Promise<boolean> {
+  const { count } = await tx.creditCardInvoice.updateMany({
+    where: { id: invoiceId, status: { not: "PAID" } },
+    data: { totalAmount: { increment: decimalToDb(amount) } },
+  });
+  return count === 1;
+}
+
 const createInstallmentPurchaseSchema = z.object({
   accountId: z.string().uuid(),
   categoryId: z.string().uuid().nullable().optional(),
@@ -68,13 +82,22 @@ export async function createInstallmentPurchase(input: CreateInstallmentPurchase
   const created = await prisma.$transaction(async (tx) => {
     let parentId: string | null = null;
     const installmentTransactions: Transaction[] = [];
+    // Faturas já pagas são puladas: a parcela (e as seguintes) vai para a
+    // próxima fatura aberta.
+    let monthOffset = 0;
 
     for (let i = 0; i < parsed.totalInstallments; i += 1) {
       const isLast = i === parsed.totalInstallments - 1;
       const installmentAmount = isLast ? baseInstallment.plus(remainder) : baseInstallment;
 
-      const { closingDate, dueDate } = invoiceWindowForPurchase(parsed.date, i);
-      const invoice = await getOrCreateInvoice(tx, parsed.accountId, closingDate, dueDate);
+      let invoiceWindow = invoiceWindowForPurchase(parsed.date, i + monthOffset);
+      let invoice = await getOrCreateInvoice(tx, parsed.accountId, invoiceWindow.closingDate, invoiceWindow.dueDate);
+      while (!(await addToOpenInvoice(tx, invoice.id, installmentAmount))) {
+        monthOffset += 1;
+        invoiceWindow = invoiceWindowForPurchase(parsed.date, i + monthOffset);
+        invoice = await getOrCreateInvoice(tx, parsed.accountId, invoiceWindow.closingDate, invoiceWindow.dueDate);
+      }
+      const { closingDate } = invoiceWindow;
 
       const installmentTransaction: Transaction = await tx.transaction.create({
         data: {
@@ -103,11 +126,6 @@ export async function createInstallmentPurchase(input: CreateInstallmentPurchase
 
       if (i === 0) parentId = installmentTransaction.id;
       installmentTransactions.push(installmentTransaction);
-
-      await tx.creditCardInvoice.update({
-        where: { id: invoice.id },
-        data: { totalAmount: { increment: decimalToDb(installmentAmount) } },
-      });
 
       // Débito integral reconhecido no ato da compra (convenção adotada:
       // `currentBalance` de uma conta CREDIT_CARD é o total já comprometido
@@ -145,8 +163,17 @@ export async function settleInvoice(input: SettleInvoiceInput) {
   const parsed = settleInvoiceSchema.parse(input);
 
   const settlement = await prisma.$transaction(async (tx) => {
+    // Reivindica a fatura antes de qualquer outra coisa: o UPDATE condicional
+    // trava a linha, e um segundo pagamento simultâneo espera este terminar e
+    // então não encontra mais a fatura em aberto (count 0). Ler o status e
+    // decidir depois deixava os dois passarem e debitava a conta em dobro.
+    // Se algo abaixo falhar, o rollback devolve o status anterior.
+    const claimed = await tx.creditCardInvoice.updateMany({
+      where: { id: parsed.invoiceId, status: { not: "PAID" } },
+      data: { status: "PAID" },
+    });
     const invoice = await tx.creditCardInvoice.findUniqueOrThrow({ where: { id: parsed.invoiceId } });
-    if (invoice.status === "PAID") {
+    if (claimed.count !== 1) {
       throw new Error("Esta fatura já está liquidada.");
     }
     if (parsed.payingAccountId === invoice.accountId) {
@@ -201,7 +228,7 @@ export async function settleInvoice(input: SettleInvoiceInput) {
 
     await tx.creditCardInvoice.update({
       where: { id: invoice.id },
-      data: { status: "PAID", settlementTransactionId: settlementTransaction.id },
+      data: { settlementTransactionId: settlementTransaction.id },
     });
 
     return settlementTransaction;
