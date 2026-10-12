@@ -47,7 +47,6 @@ interface CategoryOption {
 const SORT_COLUMNS = [
   { key: "date", label: "Data" },
   { key: "description", label: "Descrição" },
-  { key: "amount", label: "Valor" },
 ] as const;
 
 export function TransactionsTable({
@@ -75,6 +74,29 @@ export function TransactionsTable({
       params.set("sortDir", "desc");
     }
     router.push(`${pathname}?${params.toString()}`);
+  }
+
+  function renderSortButton(column: string, label: string, className?: string) {
+    return (
+      <button
+        onClick={() => toggleSort(column)}
+        className={cn(
+          "flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-on-surface-variant hover:text-on-surface",
+          className,
+        )}
+      >
+        {label}
+        {sortBy === column ? (
+          sortDir === "asc" ? (
+            <ArrowUp className="size-3" />
+          ) : (
+            <ArrowDown className="size-3" />
+          )
+        ) : (
+          <ArrowUpDown className="size-3 opacity-40" />
+        )}
+      </button>
+    );
   }
 
   function toggleRow(id: string) {
@@ -143,28 +165,12 @@ export function TransactionsTable({
               </TableHead>
               <TableHead className="w-10" />
               {SORT_COLUMNS.map((col) => (
-                <TableHead key={col.key}>
-                  <button
-                    onClick={() => toggleSort(col.key)}
-                    className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-on-surface-variant hover:text-on-surface"
-                  >
-                    {col.label}
-                    {sortBy === col.key ? (
-                      sortDir === "asc" ? (
-                        <ArrowUp className="size-3" />
-                      ) : (
-                        <ArrowDown className="size-3" />
-                      )
-                    ) : (
-                      <ArrowUpDown className="size-3 opacity-40" />
-                    )}
-                  </button>
-                </TableHead>
+                <TableHead key={col.key}>{renderSortButton(col.key, col.label)}</TableHead>
               ))}
               <TableHead>Conta</TableHead>
               <TableHead>Categoria</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Valor</TableHead>
+              <TableHead className="text-right">{renderSortButton("amount", "Valor", "ml-auto")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -197,9 +203,6 @@ export function TransactionsTable({
                         ({row.installmentNumber}/{row.totalInstallments})
                       </span>
                     )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Money value={row.amount} tone={row.type === "TRANSFER" ? "transfer" : "auto"} />
                   </TableCell>
                   <TableCell className="text-sm text-on-surface-variant">{row.account.name}</TableCell>
                   <TableCell>
@@ -239,7 +242,9 @@ export function TransactionsTable({
                       {row.isReconciled ? "Conciliado" : "Pendente"}
                     </Badge>
                   </TableCell>
-                  <TableCell />
+                  <TableCell className="text-right">
+                    <Money value={row.amount} tone={row.type === "TRANSFER" ? "transfer" : "auto"} />
+                  </TableCell>
                 </TableRow>
               ))
             )}
